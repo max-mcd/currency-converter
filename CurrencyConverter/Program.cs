@@ -1,13 +1,38 @@
-// <copyright file="Program.cs" company="PlaceholderCompany">
-// Copyright (c) PlaceholderCompany. All rights reserved.
-// </copyright>
-
+using CurrencyConverter.Helpers;
+using CurrencyConverter.Models;
+using CurrencyConverter.Services;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.HttpsPolicy;
 var builder = WebApplication.CreateBuilder(args);
 
+// Configure Kestrel
+builder.WebHost.ConfigureKestrel(serverOptions =>
+{
+    serverOptions.ListenAnyIP(5081); // HTTP port
+    serverOptions.ListenAnyIP(7197, listenOptions =>
+    {
+        listenOptions.UseHttps();
+    }); // HTTPS port
+});
+
+// Configure HTTPS
+var httpsPort = builder.Configuration.GetValue<int?>("Https:Port");
+if (httpsPort.HasValue)
+{
+    builder.Services.Configure<HttpsRedirectionOptions>(options =>
+    {
+        options.HttpsPort = httpsPort.Value;
+    });
+}
+
 // Add services to the container.
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// Register our services
+var csvFilePath = Path.Combine(builder.Environment.ContentRootPath, "..", "Data", "conversion_rates.csv");
+builder.Services.AddSingleton<ICurrencyRateService>(sp => new CurrencyRateService(csvFilePath));
+builder.Services.AddSingleton<ConversionRequestValidator>();
 
 var app = builder.Build();
 
@@ -20,27 +45,62 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching",
-};
+// Initialize currency rates
+var rateService = app.Services.GetRequiredService<ICurrencyRateService>();
+await rateService.InitializeRatesAsync();
 
-app.MapGet("/weatherforecast", () =>
+app.MapPost("/api/convert", async (
+    [FromBody] ConversionRequest request,
+    ICurrencyRateService rateService,
+    ConversionRequestValidator validator,
+    HttpContext context) =>
 {
-    var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast(
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]))
-        .ToArray();
-    return forecast;
+    // Handle model validation errors
+    if (!context.Request.HasJsonContentType() || !context.Request.Body.CanRead)
+    {
+        return Results.BadRequest(new ErrorResponse(
+            "Invalid request format",
+            new { Error = "Request must be valid JSON with proper decimal values" }
+        ));
+    }
+
+    // Validate request
+    var (isValid, error) = validator.ValidateRequest(request);
+    if (!isValid)
+    {
+        return error!.Error switch
+        {
+            string msg when msg.Contains("Invalid currency format") => Results.BadRequest(error),
+            string msg when msg.Contains("Currency not supported") => Results.NotFound(error),
+            _ => Results.BadRequest(error)
+        };
+    }
+
+    try
+    {
+        // Get conversion rate and calculate result
+        var rate = rateService.GetConversionRate(request.FromCountry, request.ToCountry);
+        var convertedAmount = Math.Round(request.Amount * rate, 2, MidpointRounding.AwayFromZero);
+
+        return Results.Ok(new ConversionResponse
+        {
+            ConvertedAmount = convertedAmount
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            detail: ex.Message,
+            statusCode: StatusCodes.Status500InternalServerError,
+            title: "An error occurred while processing the conversion"
+        );
+    }
 })
-.WithName("GetWeatherForecast")
-.WithOpenApi();
+.WithName("ConvertCurrency")
+.WithOpenApi()
+.Produces<ConversionResponse>(200)
+.Produces<ErrorResponse>(400)
+.Produces<ErrorResponse>(404)
+.Produces<ProblemDetails>(500);
 
 app.Run();
-
-record WeatherForecast(DateOnly date, int temperatureC, string? summary)
-{
-    public int TemperatureF => 32 + (int)(this.temperatureC / 0.5556);
-}

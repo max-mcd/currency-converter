@@ -1,6 +1,69 @@
-@CurrencyConverter_HostAddress = http://localhost:5081
+@baseUrl = https://localhost:7197
 
-GET {{CurrencyConverter_HostAddress}}/weatherforecast/
-Accept: application/json
+### 1. Successful conversion from USD to EUR
+POST {{baseUrl}}/api/convert
+Content-Type: application/json
 
-###
+{
+    "fromCountry": "USD",
+    "toCountry": "EUR",
+    "amount": 100.00
+}
+
+### 2. Invalid currency format (should return 400)
+POST {{baseUrl}}/api/convert
+Content-Type: application/json
+
+{
+    "fromCountry": "US", // Invalid: not 3 letters
+    "toCountry": "EUR",
+    "amount": 50.00
+}
+
+### 3. Unsupported currency (should return 404)
+POST {{baseUrl}}/api/convert
+Content-Type: application/json
+
+{
+    "fromCountry": "XYZ", // Non-existent currency
+    "toCountry": "USD",
+    "amount": 75.00
+}
+
+### 4. Invalid amount (should return 400)
+POST {{baseUrl}}/api/convert
+Content-Type: application/json
+
+{
+    "fromCountry": "USD",
+    "toCountry": "EUR",
+    "amount": 0.00  // Amount must be between 0.01 and 999999999.99
+}
+
+### Expected Responses:
+
+# 1. Success (200 OK)
+# {
+#     "convertedAmount": 92.14
+# }
+
+# 2. Invalid Format (400 Bad Request)
+# {
+#     "error": "Invalid currency format. Currency codes must be 3 letters.",
+#     "details": {
+#         "invalidCodes": ["US"]
+#     }
+# }
+
+# 3. Not Found (404 Not Found)
+# {
+#     "error": "Currency not supported",
+#     "details": {
+#         "invalidCodes": ["XYZ"]
+#     }
+# }
+
+# 4. Invalid Amount (400 Bad Request)
+# {
+#     "error": "Amount must be between 0.01 and 999999999.99"
+# }

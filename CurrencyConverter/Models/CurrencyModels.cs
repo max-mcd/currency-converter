@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace CurrencyConverter.Models
 {
     /// <summary>
@@ -36,6 +38,9 @@ namespace CurrencyConverter.Models
     {
         public required string FromCountry { get; init; }
         public required string ToCountry { get; init; }
+
+        [Range(typeof(decimal), "0.01", "999999999.99",
+            ErrorMessage = "Amount must be between {1} and {2}")]
         public decimal Amount { get; init; }
     }
 
